@@ -68,21 +68,25 @@ function guessColumnType(col) {
   return { icon: "📝", label: "Campo" };
 }
 
-// ── Storage con localStorage ─────────────────────────────────────────────────
+// ── Storage con fallback en memoria ──────────────────────────────────────────
+// Si window.storage falla, los datos se guardan en memoria (duran toda la sesión)
 const _mem = new Map();
 
 async function storageSave(key, value) {
-  _mem.set(key, value);
-  try { localStorage.setItem(key, value); } catch {}
-  return true;
+  _mem.set(key, value); // siempre guardamos en memoria
+  try {
+    const r = await window.storage.set(key, value);
+    if (r !== null) return true;
+  } catch {}
+  return true; // la memoria siempre funciona
 }
 
 async function storageLoad(key) {
   try {
-    const v = localStorage.getItem(key);
-    if (v !== null) { _mem.set(key, v); return v; }
+    const r = await window.storage.get(key);
+    if (r) { _mem.set(key, r.value); return r.value; }
   } catch {}
-  return _mem.get(key) || null;
+  return _mem.get(key) || null; // fallback a memoria
 }
 
 async function saveAllData(workers, sources, onProgress) {
@@ -281,6 +285,7 @@ export default function App() {
   // Admin
   const [adminTab, setAdminTab] = useState("workers");
   const [expandedId, setExpandedId] = useState(null);
+  const [selectedWorkers, setSelectedWorkers] = useState(new Set()); // ids seleccionados para borrado masivo
   const [copiedId, setCopiedId] = useState("");
   const [msgModal, setMsgModal] = useState(null);
   const [newPassInput, setNewPassInput] = useState("");
@@ -564,6 +569,66 @@ export default function App() {
         .then(() => { setCopiedId(w.id); setTimeout(() => setCopiedId(""), 2000); })
         .catch(() => setMsgModal({ name: getWorkerName(w), msg }));
     } catch { setMsgModal({ name: getWorkerName(w), msg }); }
+  };
+
+
+  const deleteWorker = async (w) => {
+    const name = getWorkerName(w);
+    if (!window.confirm(`¿Eliminar a "${name}"?\n\nEsta acción no se puede deshacer.`)) return;
+    const updated = workers.filter(x => x.id !== w.id);
+    const updatedSources = sources.map(s =>
+      s.id === w.sourceId ? { ...s, count: updated.filter(x => x.sourceId === s.id).length } : s
+    );
+    await saveAllData(updated, updatedSources);
+    try { await storageSave(`sub-${w.code}`, ""); } catch {}
+    setWorkers(updated);
+    setSources(updatedSources);
+    const s2 = { ...submissions }; delete s2[w.code]; setSubmissions(s2);
+    if (expandedId === w.id) setExpandedId(null);
+  };
+
+  const deleteSource = async (sourceId) => {
+    const src = sources.find(s => s.id === sourceId);
+    const count = workers.filter(w => w.sourceId === sourceId).length;
+    if (!window.confirm(`¿Eliminar "${src?.name}" y sus ${count} trabajadores?\n\nEsta acción no se puede deshacer.`)) return;
+    const updated = workers.filter(w => w.sourceId !== sourceId);
+    const updatedSources = sources.filter(s => s.id !== sourceId);
+    await saveAllData(updated, updatedSources);
+    setWorkers(updated); setSources(updatedSources);
+    const s2 = { ...submissions };
+    workers.filter(w => w.sourceId === sourceId).forEach(w => { delete s2[w.code]; });
+    setSubmissions(s2);
+    if (sourceFilter === sourceId) setSourceFilter("all");
+  };
+
+  const toggleSelectWorker = (id) => {
+    setSelectedWorkers(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedWorkers.size === pagedWorkers.length) {
+      setSelectedWorkers(new Set());
+    } else {
+      setSelectedWorkers(new Set(pagedWorkers.map(w => w.id)));
+    }
+  };
+
+  const deleteSelected = async () => {
+    if (!selectedWorkers.size) return;
+    if (!window.confirm(`¿Eliminar ${selectedWorkers.size} trabajador${selectedWorkers.size !== 1 ? "es" : ""}?\n\nEsta acción no se puede deshacer.`)) return;
+    const updated = workers.filter(w => !selectedWorkers.has(w.id));
+    const updatedSources = sources.map(s => ({ ...s, count: updated.filter(x => x.sourceId === s.id).length }));
+    await saveAllData(updated, updatedSources);
+    setWorkers(updated);
+    setSources(updatedSources);
+    const s2 = { ...submissions };
+    workers.filter(w => selectedWorkers.has(w.id)).forEach(w => { delete s2[w.code]; });
+    setSubmissions(s2);
+    setSelectedWorkers(new Set());
   };
 
   const changeAdminPass = async () => {
@@ -895,7 +960,10 @@ export default function App() {
                         <span className="text-xs text-slate-400 shrink-0">{pct}% completo</span>
                       </div>
                     </div>
-                    <span className="text-xs text-slate-400 shrink-0">Importado {src.importedAt}</span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-xs text-slate-400">Importado {src.importedAt}</span>
+                      <button onClick={() => deleteSource(src.id)} className="text-xs px-2 py-1 rounded-lg border border-red-200 text-red-400 hover:bg-red-50 hover:border-red-400 transition-colors" title="Eliminar colegio">✕</button>
+                    </div>
                   </div>
                 );
               })}
@@ -929,6 +997,14 @@ export default function App() {
               </div>
             ) : (
               <>
+                <div className="flex items-center gap-2 mb-1">
+                  <input type="checkbox"
+                    checked={pagedWorkers.length > 0 && pagedWorkers.every(w => selectedWorkers.has(w.id))}
+                    onChange={toggleSelectAll}
+                    className="w-4 h-4 rounded accent-indigo-600 cursor-pointer"
+                    title="Seleccionar todos los de esta página" />
+                  <span className="text-xs text-slate-400">Seleccionar página</span>
+                </div>
                 <div className="flex gap-2 flex-wrap">
                   <div className="relative flex-1 min-w-48">
                     <svg className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" /></svg>
@@ -947,7 +1023,19 @@ export default function App() {
                   </select>
                 </div>
 
-                <p className="text-xs text-slate-400 px-1">{filteredWorkers.length} resultado{filteredWorkers.length !== 1 ? "s" : ""}{filteredWorkers.length > PAGE_SIZE ? ` · Página ${currentPage} de ${totalPages}` : ""}</p>
+                <div className="flex items-center justify-between px-1">
+                  <p className="text-xs text-slate-400">{filteredWorkers.length} resultado{filteredWorkers.length !== 1 ? "s" : ""}{filteredWorkers.length > PAGE_SIZE ? ` · Página ${currentPage} de ${totalPages}` : ""}</p>
+                  {selectedWorkers.size > 0 && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-500 font-medium">{selectedWorkers.size} seleccionado{selectedWorkers.size !== 1 ? "s" : ""}</span>
+                      <button onClick={deleteSelected} className="text-xs bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded-lg font-semibold transition-colors flex items-center gap-1">
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                        Eliminar seleccionados
+                      </button>
+                      <button onClick={() => setSelectedWorkers(new Set())} className="text-xs text-slate-400 hover:text-slate-600 border border-slate-200 px-2.5 py-1.5 rounded-lg transition-colors">Cancelar</button>
+                    </div>
+                  )}
+                </div>
 
                 {pagedWorkers.map(w => {
                   const missing = getMissing(w, sources, submissions);
@@ -958,6 +1046,10 @@ export default function App() {
                   return (
                     <div key={w.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
                       <div className="p-4 flex items-center gap-3">
+                        <input type="checkbox" checked={selectedWorkers.has(w.id)}
+                          onChange={() => toggleSelectWorker(w.id)}
+                          onClick={e => e.stopPropagation()}
+                          className="w-4 h-4 rounded accent-indigo-600 shrink-0 cursor-pointer" />
                         <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold shrink-0 ${isComplete ? "bg-emerald-100 text-emerald-700" : hasSub ? "bg-blue-100 text-blue-700" : "bg-amber-100 text-amber-700"}`}>
                           {getWorkerName(w).charAt(0).toUpperCase() || "?"}
                         </div>
@@ -977,6 +1069,7 @@ export default function App() {
                         <div className="flex gap-2 ml-1 shrink-0">
                           <button onClick={() => setExpandedId(isExpanded ? null : w.id)} className="text-xs text-slate-500 border border-slate-200 px-2.5 py-1.5 rounded-lg font-medium hover:text-slate-700">{isExpanded ? "Cerrar" : "Ver"}</button>
                           <button onClick={() => copyCode(w)} className={`text-xs px-3 py-1.5 rounded-lg font-semibold transition-all ${copiedId === w.id ? "bg-emerald-500 text-white" : "bg-indigo-600 text-white hover:bg-indigo-700"}`}>{copiedId === w.id ? "✓ Copiado" : "Copiar msg"}</button>
+                          <button onClick={() => deleteWorker(w)} className="text-xs px-2.5 py-1.5 rounded-lg font-medium border border-red-200 text-red-500 hover:bg-red-50 hover:border-red-400 transition-colors" title="Eliminar trabajador">✕</button>
                         </div>
                       </div>
                       {isExpanded && (
