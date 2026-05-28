@@ -68,25 +68,21 @@ function guessColumnType(col) {
   return { icon: "📝", label: "Campo" };
 }
 
-// ── Storage con fallback en memoria ──────────────────────────────────────────
-// Si window.storage falla, los datos se guardan en memoria (duran toda la sesión)
+// ── Storage con localStorage ─────────────────────────────────────────────────
 const _mem = new Map();
 
 async function storageSave(key, value) {
-  _mem.set(key, value); // siempre guardamos en memoria
-  try {
-    const r = await window.storage.set(key, value);
-    if (r !== null) return true;
-  } catch {}
-  return true; // la memoria siempre funciona
+  _mem.set(key, value);
+  try { localStorage.setItem(key, value); } catch {}
+  return true;
 }
 
 async function storageLoad(key) {
   try {
-    const r = await window.storage.get(key);
-    if (r) { _mem.set(key, r.value); return r.value; }
+    const v = localStorage.getItem(key);
+    if (v !== null) { _mem.set(key, v); return v; }
   } catch {}
-  return _mem.get(key) || null; // fallback a memoria
+  return _mem.get(key) || null;
 }
 
 async function saveAllData(workers, sources, onProgress) {
