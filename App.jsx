@@ -205,12 +205,12 @@ function norm(v) {
 // Devuelve el índice del trabajador existente que coincide con la fila, o -1
 function findMatch(data, workerList, existingSourceId) {
   const dniFields  = ["DNI","dni","NIF","nif","Dni"];
-  const emailFields = ["email","Email","EMAIL","correo","Correo"];
+  const emailFields = ["email","Email","EMAIL","correo","Correo","Dirección E-Mail","Correo electrónico","correo_electronico","E-Mail","e-mail","mail"];
   const nameFields  = ["nombre","Nombre","NOMBRE","name","Name"];
   const surnameFields = ["apellidos","Apellidos","APELLIDOS","apellido","Apellido"];
 
   const dataDni   = dniFields.map(f => data[f]).find(v => v && v.trim());
-  const dataEmail = emailFields.map(f => data[f]).find(v => v && v.trim());
+  const dataEmail = Object.values(data).find(v => v && String(v).includes("@")) || "";
   const dataName  = norm(nameFields.map(f => data[f]).find(v => v) || "");
   const dataSurn  = norm(surnameFields.map(f => data[f]).find(v => v) || "");
 
@@ -546,7 +546,7 @@ export default function App() {
     });
   };
   const buildCodeRows = () => {
-    const emailFields = ["email","Email","EMAIL","correo","Correo"];
+    const emailFields = ["email","Email","EMAIL","correo","Correo","Dirección E-Mail","Correo electrónico","correo_electronico","E-Mail","e-mail","mail"];
     return workers.map(w => {
       const src = sources.find(s => s.id === w.sourceId);
       return {
