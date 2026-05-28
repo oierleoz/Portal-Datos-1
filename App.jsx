@@ -322,9 +322,9 @@ export default function App() {
         // Cuentas de admin
         const defaultAccounts = [{ id: genId(), name: "Administrador", password: DEFAULT_PASS, isSuperAdmin: true }];
         try {
-          const acc = await window.storage.get("admin-accounts");
-          setAdminAccounts(acc ? JSON.parse(acc.value) : defaultAccounts);
-          if (!acc) window.storage.set("admin-accounts", JSON.stringify(defaultAccounts)).catch(() => {});
+          const acc = localStorage.getItem("admin-accounts"); const accObj = acc ? { value: acc } : null;
+          setAdminAccounts(accObj ? JSON.parse(accObj.value) : defaultAccounts);
+          if (!accObj) try { localStorage.setItem("admin-accounts", JSON.stringify(defaultAccounts)); } catch {}
         } catch { setAdminAccounts(defaultAccounts); }
 
         // Trabajadores
@@ -630,7 +630,7 @@ export default function App() {
   const changeAdminPass = async () => {
     if (!newPassInput.trim() || !currentAdmin) return;
     const updated = adminAccounts.map(a => a.id === currentAdmin.id ? { ...a, password: newPassInput.trim() } : a);
-    await window.storage.set("admin-accounts", JSON.stringify(updated));
+    try { localStorage.setItem("admin-accounts", JSON.stringify(updated)); } catch {}
     setAdminAccounts(updated);
     setCurrentAdmin(prev => ({ ...prev, password: newPassInput.trim() }));
     setNewPassInput("");
@@ -644,7 +644,7 @@ export default function App() {
     }
     const newAccount = { id: genId(), name: newAccountName.trim(), password: newAccountPass.trim(), isSuperAdmin: false };
     const updated = [...adminAccounts, newAccount];
-    await window.storage.set("admin-accounts", JSON.stringify(updated));
+    try { localStorage.setItem("admin-accounts", JSON.stringify(updated)); } catch {}
     setAdminAccounts(updated);
     setNewAccountName(""); setNewAccountPass("");
     alert(`Cuenta "${newAccount.name}" creada correctamente.`);
@@ -655,7 +655,7 @@ export default function App() {
     const target = adminAccounts.find(a => a.id === id);
     if (!window.confirm(`¿Eliminar la cuenta de "${target?.name}"?`)) return;
     const updated = adminAccounts.filter(a => a.id !== id);
-    await window.storage.set("admin-accounts", JSON.stringify(updated));
+    try { localStorage.setItem("admin-accounts", JSON.stringify(updated)); } catch {}
     setAdminAccounts(updated);
   };
 
