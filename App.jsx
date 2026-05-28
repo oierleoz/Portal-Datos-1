@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
+import { createClient } from "@supabase/supabase-js";
 
 const DEFAULT_PASS = "fundacion2024";
 const PAGE_SIZE = 30;
@@ -68,66 +69,70 @@ function guessColumnType(col) {
   return { icon: "📝", label: "Campo" };
 }
 
-// ── Storage con localStorage ─────────────────────────────────────────────────
-const _mem = new Map();
-
-async function storageSave(key, value) {
-  _mem.set(key, value);
-  try { localStorage.setItem(key, value); } catch {}
-  return true;
-}
-
-async function storageLoad(key) {
-  try {
-    const v = localStorage.getItem(key);
-    if (v !== null) { _mem.set(key, v); return v; }
-  } catch {}
-  return _mem.get(key) || null;
-}
+// ── Supabase ──────────────────────────────────────────────────────────────────
+const supabase = createClient("https://xxngtpjazyyndpesjnqj.supabase.co", "sb_publishable_fPUGcE9ql3JsnpemR_EKQg_gQPIix3C");
 
 async function saveAllData(workers, sources, onProgress) {
-  if (onProgress) onProgress(1, 1);
-  await storageSave("portal-workers", JSON.stringify({ workers, sources }));
+  // Upsert sources
+  await supabase.from("sources").upsert(sources.map(s => ({
+    id: s.id, name: s.name, columns: s.columns,
+    imported_at: s.importedAt, count: s.count || 0
+  })));
+
+  // Delete removed sources
+  if (sources.length > 0) {
+    await supabase.from("sources").delete().not("id", "in", `(${sources.map(s => s.id).join(",")})`);
+  }
+
+  // Upsert workers in batches of 100
+  const BATCH = 100;
+  const totalBatches = Math.ceil(workers.length / BATCH) || 1;
+  for (let i = 0; i < workers.length; i += BATCH) {
+    const batch = workers.slice(i, i + BATCH).map(w => ({
+      id: w.id, code: w.code, source_id: w.sourceId, data: w.data
+    }));
+    await supabase.from("workers").upsert(batch);
+    if (onProgress) onProgress(Math.floor(i / BATCH) + 1, totalBatches);
+  }
+
+  // Delete removed workers
+  if (workers.length > 0) {
+    await supabase.from("workers").delete().not("id", "in", `(${workers.map(w => w.id).join(",")})`);
+  } else {
+    await supabase.from("workers").delete().neq("id", "");
+  }
 }
 
 async function loadAllData() {
-  const v = await storageLoad("portal-workers");
-  if (v) {
-    try {
-      const p = JSON.parse(v);
-      return { workers: p.workers || [], sources: p.sources || [] };
-    } catch {}
-  }
-  // Migrar datos del formato antiguo (chunks)
-  const metaRaw = await storageLoad("wdata-meta");
-  if (metaRaw) {
-    try {
-      const { chunks = 0, sources = [] } = JSON.parse(metaRaw);
-      let workers = [];
-      for (let i = 0; i < chunks; i++) {
-        const c = await storageLoad(`wdata-chunk-${i}`);
-        if (c) workers = workers.concat(JSON.parse(c));
-      }
-      if (workers.length) {
-        await storageSave("portal-workers", JSON.stringify({ workers, sources }));
-        return { workers, sources };
-      }
-    } catch {}
-  }
-  return { workers: [], sources: [] };
+  try {
+    const [{ data: rawSources }, { data: rawWorkers }] = await Promise.all([
+      supabase.from("sources").select("*"),
+      supabase.from("workers").select("*"),
+    ]);
+    const sources = (rawSources || []).map(s => ({
+      id: s.id, name: s.name, columns: s.columns || [],
+      importedAt: s.imported_at, count: s.count || 0
+    }));
+    const workers = (rawWorkers || []).map(w => ({
+      id: w.id, code: w.code, sourceId: w.source_id, data: w.data || {}
+    }));
+    return { workers, sources };
+  } catch { return { workers: [], sources: [] }; }
 }
 
 async function saveSubmission(code, data) {
-  await storageSave(`sub-${code}`, JSON.stringify({ data, ts: new Date().toISOString() }));
+  await supabase.from("submissions").upsert({ code, data, ts: new Date().toISOString() });
 }
 
 async function loadSubmissions(workers) {
-  const subs = {};
-  await Promise.all(workers.map(async w => {
-    const r = await storageLoad(`sub-${w.code}`);
-    if (r) { try { subs[w.code] = JSON.parse(r); } catch {} }
-  }));
-  return subs;
+  try {
+    const codes = workers.map(w => w.code);
+    if (!codes.length) return {};
+    const { data } = await supabase.from("submissions").select("*").in("code", codes);
+    const subs = {};
+    (data || []).forEach(s => { subs[s.code] = { data: s.data, ts: s.ts }; });
+    return subs;
+  } catch { return {}; }
 }
 
 // ── Parser de archivo ─────────────────────────────────────────────────────────
@@ -322,9 +327,13 @@ export default function App() {
         // Cuentas de admin
         const defaultAccounts = [{ id: genId(), name: "Administrador", password: DEFAULT_PASS, isSuperAdmin: true }];
         try {
-          const acc = localStorage.getItem("admin-accounts"); const accObj = acc ? { value: acc } : null;
-          setAdminAccounts(accObj ? JSON.parse(accObj.value) : defaultAccounts);
-          if (!accObj) try { localStorage.setItem("admin-accounts", JSON.stringify(defaultAccounts)); } catch {}
+          const { data: accData } = await supabase.from("admin_accounts").select("*");
+          if (accData && accData.length > 0) {
+            setAdminAccounts(accData.map(a => ({ id: a.id, name: a.name, password: a.password, isSuperAdmin: a.is_super_admin })));
+          } else {
+            await supabase.from("admin_accounts").upsert(defaultAccounts.map(a => ({ id: a.id, name: a.name, password: a.password, is_super_admin: a.isSuperAdmin })));
+            setAdminAccounts(defaultAccounts);
+          }
         } catch { setAdminAccounts(defaultAccounts); }
 
         // Trabajadores
@@ -576,7 +585,7 @@ export default function App() {
       s.id === w.sourceId ? { ...s, count: updated.filter(x => x.sourceId === s.id).length } : s
     );
     await saveAllData(updated, updatedSources);
-    try { await storageSave(`sub-${w.code}`, ""); } catch {}
+    try { await supabase.from("submissions").delete().eq("code", w.code); } catch {}
     setWorkers(updated);
     setSources(updatedSources);
     const s2 = { ...submissions }; delete s2[w.code]; setSubmissions(s2);
@@ -630,7 +639,7 @@ export default function App() {
   const changeAdminPass = async () => {
     if (!newPassInput.trim() || !currentAdmin) return;
     const updated = adminAccounts.map(a => a.id === currentAdmin.id ? { ...a, password: newPassInput.trim() } : a);
-    try { localStorage.setItem("admin-accounts", JSON.stringify(updated)); } catch {}
+    await supabase.from("admin_accounts").update({ password: newPassInput.trim() }).eq("id", currentAdmin.id);
     setAdminAccounts(updated);
     setCurrentAdmin(prev => ({ ...prev, password: newPassInput.trim() }));
     setNewPassInput("");
@@ -644,7 +653,7 @@ export default function App() {
     }
     const newAccount = { id: genId(), name: newAccountName.trim(), password: newAccountPass.trim(), isSuperAdmin: false };
     const updated = [...adminAccounts, newAccount];
-    try { localStorage.setItem("admin-accounts", JSON.stringify(updated)); } catch {}
+    await supabase.from("admin_accounts").insert({ id: newAccount.id, name: newAccount.name, password: newAccount.password, is_super_admin: false });
     setAdminAccounts(updated);
     setNewAccountName(""); setNewAccountPass("");
     alert(`Cuenta "${newAccount.name}" creada correctamente.`);
@@ -655,7 +664,7 @@ export default function App() {
     const target = adminAccounts.find(a => a.id === id);
     if (!window.confirm(`¿Eliminar la cuenta de "${target?.name}"?`)) return;
     const updated = adminAccounts.filter(a => a.id !== id);
-    try { localStorage.setItem("admin-accounts", JSON.stringify(updated)); } catch {}
+    await supabase.from("admin_accounts").delete().eq("id", id);
     setAdminAccounts(updated);
   };
 
